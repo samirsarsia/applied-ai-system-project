@@ -7,6 +7,7 @@ wiring it into the Streamlit UI. It builds an owner with two pets and several
 tasks, then prints a readable "Today's Schedule".
 """
 
+import agent
 from pawpal_system import Owner, Pet, Scheduler, Task
 
 
@@ -125,11 +126,45 @@ def demo_conflicts(owner: Owner) -> None:
     print("=" * 52)
 
 
+def demo_ai_care_advisor(owner: Owner) -> None:
+    """Run three natural-language requests through the Care Advisor agent and
+    print its plan -> act -> verify trace, plus the final schedule impact."""
+    print("\n" + "=" * 52)
+    print("  AI Care Advisor demo (agentic workflow)")
+    print("=" * 52)
+
+    requests = [
+        "Whiskers seems tired today and I'm exhausted, can you lighten the schedule?",
+        "Mochi is vomiting and won't eat, what should I do?",
+        "What's today's schedule looking like?",
+    ]
+    for message in requests:
+        result = agent.run(owner, message)
+        print(f"\n  Owner: {message}")
+        print(f"  [mode: {result.mode}, confidence: {result.confidence:.2f}]")
+        print(f"  Advisor: {result.reply}")
+        print("  Trace:")
+        for step in result.trace:
+            if step["step"] == "tool_call":
+                result_summary = step["result"]
+                if step["tool"] == "get_schedule":
+                    result_summary = {
+                        "tasks_scheduled": len(step["result"]["plan"]),
+                        "minutes_used": step["result"]["total_minutes_used"],
+                        "conflicts": len(step["result"]["conflicts"]),
+                    }
+                print(f"    - tool_call: {step['tool']}({step['args']}) -> {result_summary}")
+            else:
+                print(f"    - {step['step']}: {step.get('detail', '')}")
+    print("=" * 52)
+
+
 def main() -> None:
     owner = build_demo_owner()
     print_schedule(owner)
     demo_sorting_and_filtering(owner)
     demo_conflicts(owner)
+    demo_ai_care_advisor(owner)
 
 
 if __name__ == "__main__":

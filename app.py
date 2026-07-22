@@ -1,5 +1,8 @@
+import os
+
 import streamlit as st
 
+import agent
 from pawpal_system import Owner, Pet, Scheduler, Task
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
@@ -215,3 +218,36 @@ if st.button("Generate schedule"):
             skipped = [t.title for t in pet.tasks if t.title not in scheduled_titles]
             if skipped:
                 st.warning("Skipped (over budget): " + ", ".join(skipped))
+
+st.divider()
+
+st.subheader("🤖 AI Care Advisor")
+st.caption(
+    "Ask in plain language and the agent will inspect and adjust the real schedule "
+    "(same Owner/Pet/Scheduler objects above), then double-check its own work before replying."
+)
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    st.info(
+        "No ANTHROPIC_API_KEY is set, so the advisor is running in **offline simulation mode** "
+        "(a deterministic rule-based stand-in for the LLM planner — see agent.py). "
+        "Set the env var and restart to enable live Claude reasoning."
+    )
+
+user_message = st.text_input(
+    "Ask the Care Advisor",
+    value="",
+    placeholder="e.g. Mochi seems tired today, can you lighten the schedule?",
+)
+if st.button("Ask advisor"):
+    result = agent.run(owner, user_message)
+    badge = "🟢 live-llm" if result.mode == "live-llm" else ("🟡 guardrail" if result.mode == "guardrail" else "🔵 offline-simulation")
+    st.markdown(f"**Advisor** ({badge}, confidence {result.confidence:.2f}): {result.reply}")
+
+    with st.expander("Reasoning trace (plan → act → verify)"):
+        for step in result.trace:
+            if step["step"] == "tool_call":
+                st.write(f"🔧 `{step['tool']}({step['args']})` → `{step['result']}`")
+            else:
+                st.write(f"• **{step['step']}**: {step.get('detail', '')}")
+
+    st.rerun()

@@ -1,0 +1,53 @@
+flowchart TD
+    subgraph UI["Interfaces"]
+        WEB["Streamlit UI (app.py)<br/>manual controls + chat box"]
+        CLI["Terminal demo (main.py)"]
+    end
+
+    OWNERSTATE["Owner / Pet / Task state<br/>(pawpal_system.py dataclasses)"]
+
+    subgraph AGENT["Agentic Care Advisor (agent.py)"]
+        VALIDATE["1. Input guardrails<br/>empty / oversized message check"]
+        SAFETY["2. Safety guardrail<br/>medical keyword redirect"]
+        PLAN["3. Plan<br/>live Claude tool-use OR<br/>offline keyword planner (fallback)"]
+        ACT["4. Act<br/>execute_tool() calls"]
+        VERIFY["5. Verify<br/>rebuild schedule, check budget,<br/>surface conflicts"]
+    end
+
+    TOOLS["Tool functions<br/>get_schedule · add_task · remove_task ·<br/>adjust_priority · set_time_budget"]
+
+    SCHEDULER["Scheduler (pawpal_system.py)<br/>sort_tasks · filter_tasks · build_plan ·<br/>detect_conflicts"]
+
+    CLAUDE["Claude API (Anthropic)<br/>live mode only, needs ANTHROPIC_API_KEY"]
+
+    HUMAN["Pet owner (human-in-the-loop)<br/>reads plan + conflict warnings +<br/>reasoning trace, approves or overrides"]
+
+    EVAL["Reliability layer<br/>tests/test_agent.py (pytest) +<br/>evaluation.py (scored harness)"]
+
+    WEB -->|natural-language request| VALIDATE
+    CLI -->|natural-language request| VALIDATE
+    VALIDATE --> SAFETY
+    SAFETY -->|blocked: medical topic| HUMAN
+    SAFETY -->|OK| PLAN
+    PLAN <-.->|tool-use turns, if API key set| CLAUDE
+    PLAN --> ACT
+    ACT --> TOOLS
+    TOOLS --> OWNERSTATE
+    TOOLS --> SCHEDULER
+    SCHEDULER --> OWNERSTATE
+    ACT --> VERIFY
+    VERIFY --> SCHEDULER
+    VERIFY -->|reply + full trace| WEB
+    VERIFY -->|reply + full trace| CLI
+    WEB --> HUMAN
+    CLI --> HUMAN
+
+    EVAL -.->|exercises| AGENT
+    EVAL -.->|exercises| SCHEDULER
+
+    style AGENT fill:#f3e5f5
+    style TOOLS fill:#fff3e0
+    style SCHEDULER fill:#e8f5e9
+    style CLAUDE fill:#fce4ec
+    style HUMAN fill:#e1f5ff
+    style EVAL fill:#f1f8e9
