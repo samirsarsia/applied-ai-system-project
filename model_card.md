@@ -88,6 +88,35 @@ design (no planning occurred, so there's nothing to be confident *about*).
 Reading a single aggregate number without the per-case breakdown would have
 been actively misleading, which is why the harness prints both.
 
+The third, and most striking, surprise came from finally testing the live
+Claude path with a real API key rather than only the offline fallback. Two
+things happened that the offline planner cannot do at all:
+
+1. Asked for a schedule status, the live model **independently caught a real
+   inconsistency**: `detect_conflicts()` reports the "Morning walk" conflict
+   using its `preferred_time` (08:00), but `build_plan()` lays tasks out
+   back-to-back and had actually scheduled the walk at 08:30–09:00 — a
+   pre-existing tradeoff from the original PawPal+ scheduler, documented in
+   `reflection.md` §2b, where conflicts are *detected* against preferred
+   times but never *resolved* against the actual plan. Claude noticed the
+   table it had just built didn't match the conflict message and flagged it
+   as "a scheduling glitch worth double-checking" without being asked to
+   audit anything — the offline planner just reports the conflict count
+   verbatim and would never notice this.
+2. Running `evaluation.py` live twice produced **different behavior for the
+   same input**: one run called `remove_task` directly; another run asked a
+   clarifying question first, then in a follow-up test hit the agent's
+   `MAX_STEPS` cap before fully resolving. Both eventually reached a state
+   that satisfied the test assertion, but *how* they got there differed. This
+   is the concrete tradeoff of using a real model instead of my deterministic
+   offline stand-in: it can reason about things I didn't explicitly program
+   (like the timing inconsistency above), but it is not reproducible
+   run-to-run the way the offline fallback is. That's exactly why
+   `evaluation.py`'s checks assert on final outcomes (task removed? conflict
+   reported?) rather than on the exact sequence of tool calls — asserting on
+   the latter would make the suite flaky against live Claude while still
+   passing reliably against the offline planner.
+
 ## AI Collaboration
 
 I (the developer) worked with Claude (Claude Code) to build this entire

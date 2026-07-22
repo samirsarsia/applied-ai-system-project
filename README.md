@@ -166,6 +166,62 @@ Full raw terminal output (scheduler + sorting/filtering + conflicts + all 3
 agent interactions) is reproduced in
 [Reproducible Execution Evidence](#reproducible-execution-evidence) below.
 
+### Verified live-LLM run (real Claude, not simulated)
+
+The offline planner above is the reproducible default with no key configured,
+but the live-Claude tool-use path (`_run_live()` in `agent.py`) has been
+manually verified end-to-end with a real `ANTHROPIC_API_KEY`. This is a real,
+unedited response from `python main.py` in live mode:
+
+```
+Owner: Whiskers seems tired today and I'm exhausted, can you lighten the schedule?
+[mode: live-llm, confidence: 0.90]
+Advisor: Here's today's schedule — 80 of 90 minutes used, plus a time conflict
+(Mochi's "Morning walk" overlaps Whiskers' "Vet call").
+
+Since Whiskers seems tired and you're low on energy, I'd suggest:
+- Drop "Play / enrichment" (low priority, 20 min) — let Whiskers rest instead.
+- Keep essentials: Feed cat, Vet call, Feed dog.
+- The Morning walk overlaps the Vet call — I can lower its priority so it
+  doesn't compete, or shorten it if you'd like.
+
+Want me to go ahead and remove the Play/enrichment task and deprioritize the
+Morning walk to resolve the conflict and lighten your load?
+Trace:
+  - input_validation: message length and emptiness OK
+  - llm_turn_0: (stop_reason: tool_use)
+  - tool_call: get_schedule({}) -> {'tasks_scheduled': 5, 'minutes_used': 80, 'conflicts': 1}
+  - llm_turn_1: (stop_reason: end_turn)
+  - verification: {'within_budget': True, 'minutes_used': 80, 'time_budget': 90, 'conflict_count': 1, ...}
+```
+
+Two things stood out from testing this live, both documented in more depth in
+`model_card.md`:
+
+- **Claude asked before acting** instead of immediately calling
+  `remove_task`, the way the offline planner does. That's a genuine behavior
+  difference between "a deterministic rule I wrote" and "a model reasoning
+  about the request" — arguably better UX (confirm before deleting something),
+  but it means the live path is *less* predictable turn-to-turn than the
+  offline fallback, not just smarter.
+- In a separate live run of the same request, Claude independently noticed
+  that the reported conflict window (08:00–08:30 for "Morning walk") didn't
+  match the actual scheduled slot in the table it had just built (08:30–09:00),
+  and flagged it as "a scheduling glitch worth double-checking" — correctly
+  identifying the real, pre-existing PawPal+ tradeoff documented in
+  `reflection.md` §2b (conflict detection uses `preferred_time`, but
+  `build_plan()` doesn't honor it). The offline planner never notices this;
+  it just reports the conflict count.
+- Running `evaluation.py` live also showed **non-determinism**: the same
+  case-1 request produced a task removal in one run and, in another run, hit
+  the `MAX_STEPS` cap and returned confidence 0.5 with a generic "ran out of
+  planning steps" message before converging on the same end state. The
+  offline planner is deterministic by construction; live Claude is not — the
+  6/6 pass rate on `evaluation.py` under live mode held both times, but for
+  different reasons (test-writing implication: assertions on tool-call
+  *counts* or step-by-step LLM text would be run-to-run flaky; the harness's
+  assertions on final *outcomes* were the right choice here).
+
 ## Design Decisions
 
 - **Offline fallback instead of requiring a live API key.** The agent's
