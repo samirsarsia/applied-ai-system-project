@@ -1,0 +1,62 @@
+classDiagram
+    %% PawPal+ — FINAL architecture, matching pawpal_system.py.
+    %% Task, Pet, Owner are dataclasses; Scheduler is the behavior/logic class.
+
+    class Task {
+        +str title
+        +int duration_minutes
+        +str priority
+        +str preferred_time
+        +str frequency
+        +bool completed
+        +date due_date
+        +priority_score() int
+        +fits_within(remaining_minutes) bool
+        +mark_done() None
+        +mark_complete() None
+        +is_recurring() bool
+        +next_occurrence() Task
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +list~Task~ tasks
+        +add_task(task) None
+        +remove_task(task) None
+        +list_tasks() list~Task~
+        +complete_task(task) Task
+    }
+
+    class Owner {
+        +str name
+        +int available_minutes
+        +dict preferences
+        +list~Pet~ pets
+        +add_pet(pet) None
+        +set_available_time(minutes) None
+        +set_preference(key, value) None
+        +all_tasks() list~Task~
+    }
+
+    class Scheduler {
+        +Owner owner
+        +int time_budget
+        +str day_start
+        +collect_tasks() list~tuple~
+        +sort_tasks(tasks) list~Task~
+        +sort_by_time(tasks) list~Task~
+        +filter_by_status(tasks, completed) list~Task~
+        +filter_by_pet(pet_name) list~Task~
+        +filter_tasks(tasks, budget) list~Task~
+        +detect_conflicts() list~str~
+        +build_plan() list~dict~
+    }
+
+    Owner "1" --> "*" Pet : owns
+    Pet "1" --> "*" Task : has
+    Scheduler --> Owner : uses
+    Scheduler ..> Pet : reads tasks from
+    Scheduler ..> Task : sorts, filters, plans
+    Pet ..> Task : complete_task() spawns next
+    Task ..> Task : next_occurrence() creates next
