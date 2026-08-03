@@ -7,7 +7,10 @@ wiring it into the Streamlit UI. It builds an owner with two pets and several
 tasks, then prints a readable "Today's Schedule".
 """
 
+import os
+
 import agent
+import storage
 from pawpal_system import Owner, Pet, Scheduler, Task
 
 
@@ -159,12 +162,42 @@ def demo_ai_care_advisor(owner: Owner) -> None:
     print("=" * 52)
 
 
+def demo_persistence(owner: Owner) -> None:
+    """Show storage.save_owner()/load_owner() round-tripping the owner's full
+    state to a JSON file, proving data survives a restart (not just session
+    memory). Uses a throwaway demo path, not the app's real data/owner.json."""
+    demo_path = os.path.join("data", "_main_demo_owner.json")
+
+    print("\n" + "=" * 52)
+    print("  Persistence demo (save/load to disk)")
+    print("=" * 52)
+
+    storage.save_owner(owner, demo_path)
+    print(f"  Saved {owner.name}'s {sum(len(p.tasks) for p in owner.pets)} task(s) "
+          f"across {len(owner.pets)} pet(s) to {demo_path}")
+
+    reloaded = storage.load_owner(demo_path)
+    print(f"  Reloaded from disk: name={reloaded.name!r}, "
+          f"pets={[p.name for p in reloaded.pets]}, "
+          f"available_minutes={reloaded.available_minutes}")
+
+    match = (
+        reloaded.name == owner.name
+        and [p.name for p in reloaded.pets] == [p.name for p in owner.pets]
+        and reloaded.available_minutes == owner.available_minutes
+    )
+    print(f"  Round-trip matches original: {match}")
+    os.remove(demo_path)  # clean up the demo file; the real app uses data/owner.json
+    print("=" * 52)
+
+
 def main() -> None:
     owner = build_demo_owner()
     print_schedule(owner)
     demo_sorting_and_filtering(owner)
     demo_conflicts(owner)
     demo_ai_care_advisor(owner)
+    demo_persistence(owner)
 
 
 if __name__ == "__main__":

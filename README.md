@@ -11,14 +11,19 @@ rule-based scheduling logic only.
 ## Title and Summary
 
 **PawPal+ Care Advisor** turns that rule-based scheduler into an **agentic AI
-system**: an AI "Care Advisor" that a busy pet owner can talk to in plain
-English ("Mochi seems tired today, can you lighten the schedule?") instead of
-manually editing tasks. The agent doesn't just chat — it **plans, calls real
-tools that mutate the live schedule, and verifies its own work** before
-replying, and it refuses to answer questions that need a veterinarian instead
-of a scheduling assistant. This matters because the whole point of PawPal+ is
-reducing the mental load of pet care — an assistant you have to micromanage
-through forms defeats that purpose.
+system** with real persistence, not just a classroom demo: an AI "Care
+Advisor" that a busy pet owner can talk to in plain English ("Mochi seems
+tired today, can you lighten the schedule?") instead of manually editing
+tasks. The agent doesn't just chat — it **plans, calls real tools that mutate
+the live schedule, and verifies its own work** before replying, and it
+refuses to answer questions that need a veterinarian instead of a scheduling
+assistant. Every pet, task, and schedule change is saved to disk
+(`storage.py`) so closing the app and coming back tomorrow doesn't lose
+anything — a requirement for something a pet owner would actually keep using,
+not just a one-off demo session. This matters because the whole point of
+PawPal+ is reducing the mental load of pet care — an assistant you have to
+micromanage through forms, and that forgets everything on restart, defeats
+that purpose.
 
 ## Architecture Overview
 
@@ -29,7 +34,7 @@ Mermaid source (renders directly on GitHub, or paste it into the
 ```
 Owner (Streamlit UI or terminal) → natural-language request
     → agent.py: input guardrails → safety guardrail (medical redirect)
-    → PLAN (live Claude tool-use, or offline deterministic planner as fallback)
+    → PLAN (live Gemini tool-use, or offline deterministic planner as fallback)
     → ACT (execute_tool calls: add_task / remove_task / adjust_priority / set_time_budget / get_schedule)
     → pawpal_system.py (Owner / Pet / Task / Scheduler — the original logic layer, unchanged)
     → VERIFY (rebuild the schedule, confirm it fits the time budget, surface conflicts)
@@ -44,6 +49,11 @@ step found, not just a final answer to trust blindly.
 
 A separate **reliability layer** (`tests/test_agent.py` + `evaluation.py`)
 exercises the agent's guardrails and planning logic independently of the UI.
+
+A **persistence layer** (`storage.py`) sits underneath everything: the
+Streamlit app loads the last saved `Owner` on startup and re-saves it to
+`data/owner.json` after every interaction, so restarting the server (or the
+whole machine) doesn't reset the schedule back to the demo defaults.
 
 The original PawPal+ class design is preserved in `diagrams/uml_final.mmd`
 (Task / Pet / Owner / Scheduler) — the agent is a new layer on top, not a
@@ -61,15 +71,16 @@ rewrite of that logic.
    around" a medical emergency.
 3. **Plan** — decides what to do about the request. Two interchangeable
    planners share everything downstream:
-   - **Live mode**: if `ANTHROPIC_API_KEY` is set, Claude is called with real
-     [tool use](https://docs.anthropic.com/en/docs/build-with-claude/tool-use)
-     (`agent.TOOLS`) and decides which tools to call.
-   - **Offline mode** (the default here — no key is configured in this
-     environment): a deterministic keyword-based planner that calls the exact
-     same tool functions. This is a guardrail path, not a separate feature:
-     any exception from the live API (missing package, bad key, network
-     error, rate limit) is caught and falls back here automatically, so the
-     system never crashes for lack of API access.
+   - **Live mode**: if `GEMINI_API_KEY` is set, Google Gemini is called with
+     real [function calling](https://ai.google.dev/gemini-api/docs/function-calling)
+     (`agent.TOOLS`, converted to Gemini's schema format) and decides which
+     tools to call.
+   - **Offline mode** (the default with no key configured): a deterministic
+     keyword-based planner that calls the exact same tool functions. This is
+     a guardrail path, not a separate feature: any exception from the live
+     API (missing package, bad key, network error, rate limit) is caught and
+     falls back here automatically, so the system never crashes for lack of
+     API access.
 4. **Act** — `execute_tool()` runs the chosen tool against the **real, live**
    `Owner`/`Pet`/`Scheduler` objects (the same ones the Streamlit UI reads),
    not a simulated copy. Every tool call is captured in `result.trace`.
@@ -116,21 +127,37 @@ Run the standalone evaluation harness:
 python evaluation.py
 ```
 
-**To enable live Claude reasoning** instead of the offline planner, set an API
-key before running:
+**To enable live Gemini reasoning** instead of the offline planner, set an API
+key (get one free at [Google AI Studio](https://aistudio.google.com/apikey))
+before running. The app also auto-loads a `.env` file in the project root via
+`python-dotenv`, so you can drop the key in there instead of exporting it each
+session:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+echo "GEMINI_API_KEY=your-key-here" > .env
+streamlit run app.py   # or: python main.py
+```
+
+or export it directly:
+
+```bash
+export GEMINI_API_KEY=your-key-here
 streamlit run app.py   # or: python main.py
 ```
 
 Without a key, everything above still runs correctly — the agent uses its
 offline fallback, and this is what the sample output below shows.
 
+Your data (owner, pets, tasks) is saved to `data/owner.json` after every
+change — it's gitignored, so each clone starts from a clean default owner
+rather than someone else's saved pets. Stop the app, run `streamlit run
+app.py` again, and everything you entered is still there. Use the "Reset all
+data" button in the sidebar to start over.
+
 ## Sample Interactions
 
 These are **real captured runs** in this repo (offline-simulation mode — no
-`ANTHROPIC_API_KEY` set), taken directly from `python main.py`.
+`GEMINI_API_KEY` set), taken directly from `python main.py`.
 
 **1. "Lighten the schedule" — the agent actually removes a task**
 
@@ -140,7 +167,7 @@ Owner: Whiskers seems tired today and I'm exhausted, can you lighten the schedul
 Advisor: Done — dropped low-priority task for Whiskers (Play / enrichment). 4 task(s) scheduled, using 60/90 min. Note: 1 scheduling conflict(s) still need your attention.
 Trace:
   - input_validation: message length and emptiness OK
-  - mode_selection: no ANTHROPIC_API_KEY set — using offline simulation
+  - mode_selection: no GEMINI_API_KEY set — using offline simulation
   - tool_call: remove_task({'pet_name': 'Whiskers', 'task_title': 'Play / enrichment'}) -> {'pet': 'Whiskers', 'removed': 'Play / enrichment'}
   - tool_call: get_schedule({}) -> {'tasks_scheduled': 4, 'minutes_used': 60, 'conflicts': 1}
   - verification: {'within_budget': True, 'minutes_used': 60, 'time_budget': 90, 'conflict_count': 1, ...}
@@ -166,66 +193,65 @@ Full raw terminal output (scheduler + sorting/filtering + conflicts + all 3
 agent interactions) is reproduced in
 [Reproducible Execution Evidence](#reproducible-execution-evidence) below.
 
-### Verified live-LLM run (real Claude, not simulated)
+### Verified live-LLM run (real Gemini, not simulated)
 
 The offline planner above is the reproducible default with no key configured,
-but the live-Claude tool-use path (`_run_live()` in `agent.py`) has been
-manually verified end-to-end with a real `ANTHROPIC_API_KEY`. This is a real,
-unedited response from `python main.py` in live mode:
+but the live-Gemini tool-use path (`_run_live()` in `agent.py`, using
+`gemini-flash-latest` via the `google-genai` SDK) has been manually verified
+end-to-end with a real `GEMINI_API_KEY`. This is a real, unedited response
+from `python main.py` in live mode:
 
 ```
-Owner: Whiskers seems tired today and I'm exhausted, can you lighten the schedule?
+Owner: What's today's schedule looking like?
 [mode: live-llm, confidence: 0.90]
-Advisor: Here's today's schedule — 80 of 90 minutes used, plus a time conflict
-(Mochi's "Morning walk" overlaps Whiskers' "Vet call").
+Advisor: Here is today's schedule:
 
-Since Whiskers seems tired and you're low on energy, I'd suggest:
-- Drop "Play / enrichment" (low priority, 20 min) — let Whiskers rest instead.
-- Keep essentials: Feed cat, Vet call, Feed dog.
-- The Morning walk overlaps the Vet call — I can lower its priority so it
-  doesn't compete, or shorten it if you'd like.
+**Time Budget:** 90 minutes (60 minutes scheduled)
 
-Want me to go ahead and remove the Play/enrichment task and deprioritize the
-Morning walk to resolve the conflict and lighten your load?
+**Planned Tasks:**
+* **08:00 – 08:05:** Feed cat (Whiskers, 5 mins)
+* **08:05 – 08:15:** Feed dog (Mochi, 10 mins)
+* **08:15 – 08:30:** Vet call (Whiskers, 15 mins)
+* **08:30 – 09:00:** Morning walk (Mochi, 30 mins)
+
+*Note:* There is a warning about a potential preferred-time overlap between
+Mochi's walk and Whiskers' vet call if scheduled simultaneously at 08:00, but
+the current built plan handles them sequentially without overlapping times.
 Trace:
   - input_validation: message length and emptiness OK
-  - llm_turn_0: (stop_reason: tool_use)
-  - tool_call: get_schedule({}) -> {'tasks_scheduled': 5, 'minutes_used': 80, 'conflicts': 1}
-  - llm_turn_1: (stop_reason: end_turn)
-  - verification: {'within_budget': True, 'minutes_used': 80, 'time_budget': 90, 'conflict_count': 1, ...}
+  - llm_turn_0: (function call: get_schedule)
+  - tool_call: get_schedule({}) -> {'tasks_scheduled': 4, 'minutes_used': 60, 'conflicts': 1}
+  - llm_turn_1: (final answer)
+  - verification: {'within_budget': True, 'minutes_used': 60, 'time_budget': 90, 'conflict_count': 1, ...}
 ```
 
-Two things stood out from testing this live, both documented in more depth in
-`model_card.md`:
+Two things stood out from testing this live, both worth being upfront about:
 
-- **Claude asked before acting** instead of immediately calling
-  `remove_task`, the way the offline planner does. That's a genuine behavior
-  difference between "a deterministic rule I wrote" and "a model reasoning
-  about the request" — arguably better UX (confirm before deleting something),
-  but it means the live path is *less* predictable turn-to-turn than the
-  offline fallback, not just smarter.
-- In a separate live run of the same request, Claude independently noticed
-  that the reported conflict window (08:00–08:30 for "Morning walk") didn't
-  match the actual scheduled slot in the table it had just built (08:30–09:00),
-  and flagged it as "a scheduling glitch worth double-checking" — correctly
-  identifying the real, pre-existing PawPal+ tradeoff documented in
-  `reflection.md` §2b (conflict detection uses `preferred_time`, but
-  `build_plan()` doesn't honor it). The offline planner never notices this;
-  it just reports the conflict count.
-- Running `evaluation.py` live also showed **non-determinism**: the same
-  case-1 request produced a task removal in one run and, in another run, hit
-  the `MAX_STEPS` cap and returned confidence 0.5 with a generic "ran out of
-  planning steps" message before converging on the same end state. The
-  offline planner is deterministic by construction; live Claude is not — the
-  6/6 pass rate on `evaluation.py` under live mode held both times, but for
-  different reasons (test-writing implication: assertions on tool-call
-  *counts* or step-by-step LLM text would be run-to-run flaky; the harness's
-  assertions on final *outcomes* were the right choice here).
+- **Free-tier rate limits are real and low.** The Gemini free tier used here
+  caps at 5 requests/minute per model. Running `evaluation.py`'s 6 cases back
+  to back tripped `429 RESOURCE_EXHAUSTED` on several cases; the agent's
+  existing exception-handling in `run()` caught this exactly as designed and
+  fell back to the offline planner (reported in the trace as
+  `offline-simulation (live-llm fallback)`), so the app never crashed — it
+  just silently downgraded to the deterministic planner mid-run. This is the
+  fallback path doing its job, not a bug, but it means a live demo of several
+  consecutive requests may show a mix of `live-llm` and
+  `offline-simulation (live-llm fallback)` modes depending on how fast you
+  send requests.
+- **Gemini independently reasoned about a subtlety** in the schedule data:
+  asked a neutral status question, it noticed the *reported conflict* (a
+  preferred-time overlap between Mochi's walk and Whiskers' vet call) didn't
+  actually materialize in the *built plan* (which sequenced them, 08:15–08:30
+  then 08:30–09:00) and called that out explicitly instead of just repeating
+  the conflict count — correctly identifying the real, pre-existing PawPal+
+  tradeoff documented in `reflection.md` §2b (conflict detection uses
+  `preferred_time`, but `build_plan()` doesn't honor it). The offline planner
+  never notices this; it just reports the conflict count verbatim.
 
 ## Design Decisions
 
 - **Offline fallback instead of requiring a live API key.** The agent's
-  planner is swappable: live Claude tool-use when a key is available, a
+  planner is swappable: live Gemini tool-use when a key is available, a
   deterministic rule-based planner otherwise. I chose this over *requiring*
   an API key so the system is runnable, testable, and gradeable with zero
   cost and zero network dependency, while the architecture for real LLM
@@ -255,11 +281,11 @@ scheduling tradeoffs) is preserved in [`reflection.md`](reflection.md).
 
 ## Testing Summary
 
-**Automated tests:** `python -m pytest -v` → **24/24 passed** (12 pre-existing
-scheduler tests in `tests/test_pawpal.py`, 12 new tests in
-`tests/test_agent.py` covering input guardrails, the safety redirect, each
-tool function including its error paths, and the offline planner's
-plan-act-verify behavior).
+**Automated tests:** `python -m pytest -v` → **29/29 passed** (12 pre-existing
+scheduler tests in `tests/test_pawpal.py`, 12 tests in `tests/test_agent.py`
+covering input guardrails, the safety redirect, each tool function including
+its error paths, and the offline planner's plan-act-verify behavior, plus 5
+tests in `tests/test_storage.py` covering the JSON persistence round-trip).
 
 **Evaluation harness** (`python evaluation.py`, stretch feature — see
 [Reproducible Execution Evidence](#reproducible-execution-evidence)):
@@ -276,8 +302,8 @@ What didn't: the offline planner is intent-limited — phrasing a request in a
 way that doesn't match its keyword list (e.g. "can we skip grooming today?")
 falls through to the default status-report behavior instead of taking
 action. This is a known, documented limitation of the offline fallback, not
-of the agent architecture — live Claude tool-use mode (once a key is set)
-does not have this limitation, since Claude parses free-form intent itself.
+of the agent architecture — live Gemini tool-use mode (once a key is set)
+does not have this limitation, since Gemini parses free-form intent itself.
 
 Human evaluation was done by manually running each of the 3 sample
 interactions above and confirming the resulting task list and reply matched
@@ -363,7 +389,7 @@ examples) — required to be there, not here, per the assignment.
   Advisor: Done — dropped low-priority task for Whiskers (Play / enrichment). 4 task(s) scheduled, using 60/90 min. Note: 1 scheduling conflict(s) still need your attention.
   Trace:
     - input_validation: message length and emptiness OK
-    - mode_selection: no ANTHROPIC_API_KEY set — using offline simulation
+    - mode_selection: no GEMINI_API_KEY set — using offline simulation
     - tool_call: remove_task({'pet_name': 'Whiskers', 'task_title': 'Play / enrichment'}) -> {'pet': 'Whiskers', 'removed': 'Play / enrichment'}
     - tool_call: get_schedule({}) -> {'tasks_scheduled': 4, 'minutes_used': 60, 'conflicts': 1}
     - verification: {'within_budget': True, 'minutes_used': 60, 'time_budget': 90, 'conflict_count': 1, 'conflicts': ["⚠️ Conflict (different pets): 'Morning walk' (Mochi, 08:00–08:30) overlaps 'Vet call' (Whiskers, starts 08:00)."]}
@@ -380,45 +406,58 @@ examples) — required to be there, not here, per the assignment.
   Advisor: Here's the current plan. 4 task(s) scheduled, using 60/90 min. Note: 1 scheduling conflict(s) still need your attention.
   Trace:
     - input_validation: message length and emptiness OK
-    - mode_selection: no ANTHROPIC_API_KEY set — using offline simulation
+    - mode_selection: no GEMINI_API_KEY set — using offline simulation
     - tool_call: get_schedule({}) -> {'tasks_scheduled': 4, 'minutes_used': 60, 'conflicts': 1}
     - verification: {'within_budget': True, 'minutes_used': 60, 'time_budget': 90, 'conflict_count': 1, 'conflicts': ["⚠️ Conflict (different pets): 'Morning walk' (Mochi, 08:00–08:30) overlaps 'Vet call' (Whiskers, starts 08:00)."]}
 ====================================================
+
+====================================================
+  Persistence demo (save/load to disk)
+====================================================
+  Saved Jordan's 5 task(s) across 2 pet(s) to data/_main_demo_owner.json
+  Reloaded from disk: name='Jordan', pets=['Mochi', 'Whiskers'], available_minutes=90
+  Round-trip matches original: True
+====================================================
 ```
 
-### `python -m pytest -v` (24/24 passed)
+### `python -m pytest -v` (29/29 passed)
 
 ```
 ============================= test session starts ==============================
 platform darwin -- Python 3.14.3, pytest-9.1.1, pluggy-1.6.0
-collected 24 items
+collected 29 items
 
-tests/test_agent.py::test_empty_message_is_rejected PASSED               [  4%]
-tests/test_agent.py::test_oversized_message_is_rejected PASSED           [  8%]
-tests/test_agent.py::test_medical_keyword_triggers_safety_redirect PASSED [ 12%]
-tests/test_agent.py::test_normal_message_does_not_trigger_safety_redirect PASSED [ 16%]
-tests/test_agent.py::test_execute_tool_get_schedule_returns_plan_and_conflicts PASSED [ 20%]
-tests/test_agent.py::test_execute_tool_adjust_priority_changes_task PASSED [ 25%]
-tests/test_agent.py::test_execute_tool_unknown_pet_returns_error_not_exception PASSED [ 29%]
-tests/test_agent.py::test_execute_tool_add_task_validates_via_pawpal_system PASSED [ 33%]
-tests/test_agent.py::test_execute_tool_unknown_tool_name_returns_error PASSED [ 37%]
-tests/test_agent.py::test_offline_mode_drops_low_priority_task_when_owner_is_tired PASSED [ 41%]
-tests/test_agent.py::test_offline_mode_reports_verification_in_trace PASSED [ 45%]
-tests/test_agent.py::test_offline_mode_handles_empty_pet_without_crashing PASSED [ 50%]
-tests/test_pawpal.py::test_task_completion PASSED                        [ 54%]
-tests/test_pawpal.py::test_task_addition_increases_pet_task_count PASSED [ 58%]
-tests/test_pawpal.py::test_sort_by_time_returns_chronological_order PASSED [ 62%]
-tests/test_pawpal.py::test_sort_by_time_puts_untimed_tasks_last PASSED   [ 66%]
-tests/test_pawpal.py::test_daily_task_recurrence_creates_next_day PASSED [ 70%]
-tests/test_pawpal.py::test_weekly_task_recurrence_advances_seven_days PASSED [ 75%]
-tests/test_pawpal.py::test_once_task_has_no_next_occurrence PASSED       [ 79%]
-tests/test_pawpal.py::test_detect_conflicts_flags_overlapping_times PASSED [ 83%]
-tests/test_pawpal.py::test_detect_conflicts_none_when_times_do_not_overlap PASSED [ 87%]
-tests/test_pawpal.py::test_filter_by_status_splits_done_and_pending PASSED [ 91%]
-tests/test_pawpal.py::test_filter_by_pet_returns_only_that_pets_tasks PASSED [ 95%]
-tests/test_pawpal.py::test_empty_pet_produces_empty_plan_and_no_conflicts PASSED [100%]
+tests/test_agent.py::test_empty_message_is_rejected PASSED               [  3%]
+tests/test_agent.py::test_oversized_message_is_rejected PASSED           [  6%]
+tests/test_agent.py::test_medical_keyword_triggers_safety_redirect PASSED [ 10%]
+tests/test_agent.py::test_normal_message_does_not_trigger_safety_redirect PASSED [ 13%]
+tests/test_agent.py::test_execute_tool_get_schedule_returns_plan_and_conflicts PASSED [ 17%]
+tests/test_agent.py::test_execute_tool_adjust_priority_changes_task PASSED [ 20%]
+tests/test_agent.py::test_execute_tool_unknown_pet_returns_error_not_exception PASSED [ 24%]
+tests/test_agent.py::test_execute_tool_add_task_validates_via_pawpal_system PASSED [ 27%]
+tests/test_agent.py::test_execute_tool_unknown_tool_name_returns_error PASSED [ 31%]
+tests/test_agent.py::test_offline_mode_drops_low_priority_task_when_owner_is_tired PASSED [ 34%]
+tests/test_agent.py::test_offline_mode_reports_verification_in_trace PASSED [ 37%]
+tests/test_agent.py::test_offline_mode_handles_empty_pet_without_crashing PASSED [ 41%]
+tests/test_pawpal.py::test_task_completion PASSED                        [ 44%]
+tests/test_pawpal.py::test_task_addition_increases_pet_task_count PASSED [ 48%]
+tests/test_pawpal.py::test_sort_by_time_returns_chronological_order PASSED [ 51%]
+tests/test_pawpal.py::test_sort_by_time_puts_untimed_tasks_last PASSED   [ 55%]
+tests/test_pawpal.py::test_daily_task_recurrence_creates_next_day PASSED [ 58%]
+tests/test_pawpal.py::test_weekly_task_recurrence_advances_seven_days PASSED [ 62%]
+tests/test_pawpal.py::test_once_task_has_no_next_occurrence PASSED       [ 65%]
+tests/test_pawpal.py::test_detect_conflicts_flags_overlapping_times PASSED [ 68%]
+tests/test_pawpal.py::test_detect_conflicts_none_when_times_do_not_overlap PASSED [ 72%]
+tests/test_pawpal.py::test_filter_by_status_splits_done_and_pending PASSED [ 75%]
+tests/test_pawpal.py::test_filter_by_pet_returns_only_that_pets_tasks PASSED [ 79%]
+tests/test_pawpal.py::test_empty_pet_produces_empty_plan_and_no_conflicts PASSED [ 82%]
+tests/test_storage.py::test_save_then_load_round_trips_all_fields PASSED [ 86%]
+tests/test_storage.py::test_load_missing_file_returns_none PASSED        [ 89%]
+tests/test_storage.py::test_load_corrupt_file_returns_none_not_exception PASSED [ 93%]
+tests/test_storage.py::test_save_creates_parent_directories PASSED       [ 96%]
+tests/test_storage.py::test_save_overwrites_existing_file PASSED         [100%]
 
-============================== 24 passed in 0.02s ==============================
+============================== 29 passed in 0.07s ==============================
 ```
 
 ### `python evaluation.py` (reliability/guardrail evaluation harness, 6/6 passed)

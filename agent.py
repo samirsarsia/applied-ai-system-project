@@ -9,14 +9,14 @@ plan-act-verify loop that defines an agentic system.
 
 Two execution modes, selected automatically:
 
-- Live LLM mode: if `anthropic` is installed and ANTHROPIC_API_KEY is set,
-  the agent calls Claude with tool-use (function calling). Claude decides
+- Live LLM mode: if `google-genai` is installed and GEMINI_API_KEY is set,
+  the agent calls Gemini with tool-use (function calling). Gemini decides
   which tools to call and in what order; this module only executes them.
-- Offline simulation mode (the default in this environment, since no API
-  key is configured here): a deterministic, keyword-based planner executes
-  the *same* tools through the *same* verification step. This keeps the
-  system fully runnable/testable with zero cost and zero network dependency,
-  and is the guardrail path used when the live API is unavailable or errors.
+- Offline simulation mode (used when no API key is configured): a
+  deterministic, keyword-based planner executes the *same* tools through the
+  *same* verification step. This keeps the system fully runnable/testable
+  with zero cost and zero network dependency, and is the guardrail path used
+  when the live API is unavailable or errors.
 
 Both modes share:
 - `TOOLS` / `execute_tool()` — the actual actions available to the agent.
@@ -32,7 +32,6 @@ Both modes share:
 
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Any
@@ -247,57 +246,97 @@ def run(owner: Owner, message: str) -> AgentResult:
             safety_redirect=True,
         )
 
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if os.environ.get("GEMINI_API_KEY"):
         try:
             return _run_live(owner, message, trace)
         except Exception as exc:  # noqa: BLE001 - any API/SDK failure falls back safely
             trace.append({"step": "live_llm_error", "detail": f"{type(exc).__name__}: {exc}"})
             return _run_offline(owner, message, trace, fallback_reason=str(exc))
 
-    trace.append({"step": "mode_selection", "detail": "no ANTHROPIC_API_KEY set — using offline simulation"})
+    trace.append({"step": "mode_selection", "detail": "no GEMINI_API_KEY set — using offline simulation"})
     return _run_offline(owner, message, trace)
 
 
-def _run_live(owner: Owner, message: str, trace: list[dict]) -> AgentResult:
-    """Real Claude tool-use agentic loop. Only reached if ANTHROPIC_API_KEY is set."""
-    import anthropic  # imported lazily so the module works with no dependency installed
+_JSON_TYPE_TO_GEMINI = {
+    "object": "OBJECT",
+    "string": "STRING",
+    "integer": "INTEGER",
+    "number": "NUMBER",
+    "boolean": "BOOLEAN",
+    "array": "ARRAY",
+}
 
-    client = anthropic.Anthropic()
+
+def _to_gemini_schema(schema: dict) -> dict:
+    """Convert our Claude-style JSON schema (lowercase types) into the
+    upper-cased type schema Gemini's function-calling API expects."""
+    converted: dict[str, Any] = {"type": _JSON_TYPE_TO_GEMINI[schema["type"]]}
+    if "properties" in schema:
+        converted["properties"] = {
+            key: _to_gemini_schema(value) for key, value in schema["properties"].items()
+        }
+    if "required" in schema:
+        converted["required"] = schema["required"]
+    if "enum" in schema:
+        converted["enum"] = schema["enum"]
+    if "description" in schema:
+        converted["description"] = schema["description"]
+    return converted
+
+
+def _run_live(owner: Owner, message: str, trace: list[dict]) -> AgentResult:
+    """Real Gemini tool-use agentic loop. Only reached if GEMINI_API_KEY is set."""
+    from google import genai  # imported lazily so the module works with no dependency installed
+    from google.genai import types
+
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     system = (
         "You are the PawPal+ Care Advisor. You help a pet owner adjust today's pet-care "
         "schedule using the tools provided. Always call get_schedule at least once before "
         "and after making changes, so your final answer reflects the real, current state. "
         "Be concise. Never give medical advice."
     )
-    messages: list[dict[str, Any]] = [{"role": "user", "content": message}]
+    gemini_tools = [
+        types.Tool(
+            function_declarations=[
+                {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": _to_gemini_schema(tool["input_schema"]),
+                }
+                for tool in TOOLS
+            ]
+        )
+    ]
+    config = types.GenerateContentConfig(system_instruction=system, tools=gemini_tools)
+    contents: list[types.Content] = [
+        types.Content(role="user", parts=[types.Part(text=message)])
+    ]
 
     for step in range(MAX_STEPS):
-        response = client.messages.create(
-            model="claude-sonnet-5",
-            max_tokens=1024,
-            system=system,
-            tools=TOOLS,
-            messages=messages,
+        response = client.models.generate_content(
+            model="gemini-flash-latest", contents=contents, config=config,
         )
-        trace.append({"step": f"llm_turn_{step}", "stop_reason": response.stop_reason})
+        candidate = response.candidates[0]
+        parts = candidate.content.parts or []
+        function_calls = [p.function_call for p in parts if p.function_call is not None]
+        trace.append({"step": f"llm_turn_{step}", "stop_reason": candidate.finish_reason.name if candidate.finish_reason else "STOP"})
 
-        if response.stop_reason != "tool_use":
-            final_text = "".join(b.text for b in response.content if b.type == "text")
+        if not function_calls:
+            final_text = "".join(p.text for p in parts if p.text)
             verification = _verify_plan(owner)
             trace.append({"step": "verification", "detail": verification})
             return AgentResult(reply=final_text, trace=trace, mode="live-llm", confidence=0.9)
 
-        messages.append({"role": "assistant", "content": response.content})
-        tool_results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-            result = execute_tool(owner, block.name, block.input)
-            trace.append({"step": "tool_call", "tool": block.name, "args": block.input, "result": result})
-            tool_results.append(
-                {"type": "tool_result", "tool_use_id": block.id, "content": json.dumps(result)}
+        contents.append(candidate.content)
+        response_parts = []
+        for call in function_calls:
+            result = execute_tool(owner, call.name, dict(call.args or {}))
+            trace.append({"step": "tool_call", "tool": call.name, "args": dict(call.args or {}), "result": result})
+            response_parts.append(
+                types.Part(function_response=types.FunctionResponse(name=call.name, response=result))
             )
-        messages.append({"role": "user", "content": tool_results})
+        contents.append(types.Content(role="user", parts=response_parts))
 
     trace.append({"step": "max_steps_reached", "detail": f"stopped after {MAX_STEPS} agentic turns"})
     verification = _verify_plan(owner)

@@ -4,7 +4,9 @@ flowchart TD
         CLI["Terminal demo (main.py)"]
     end
 
-    OWNERSTATE["Owner / Pet / Task state<br/>(pawpal_system.py dataclasses)"]
+    OWNERSTATE["Owner / Pet / Task state<br/>(pawpal_system.py dataclasses, in-memory)"]
+
+    STORAGE["Persistence (storage.py)<br/>data/owner.json<br/>saved after every rerun"]
 
     subgraph AGENT["Agentic Care Advisor (agent.py)"]
         VALIDATE["1. Input guardrails<br/>empty / oversized message check"]
@@ -24,6 +26,8 @@ flowchart TD
 
     EVAL["Reliability layer<br/>tests/test_agent.py (pytest) +<br/>evaluation.py (scored harness)"]
 
+    WEB -->|on load: try load_owner()| STORAGE
+    STORAGE -->|Owner restored, or fresh default| OWNERSTATE
     WEB -->|natural-language request| VALIDATE
     CLI -->|natural-language request| VALIDATE
     VALIDATE --> SAFETY
@@ -41,9 +45,11 @@ flowchart TD
     VERIFY -->|reply + full trace| CLI
     WEB --> HUMAN
     CLI --> HUMAN
+    WEB -->|save_owner() every rerun| STORAGE
 
     EVAL -.->|exercises| AGENT
     EVAL -.->|exercises| SCHEDULER
+    EVAL -.->|exercises| STORAGE
 
     style AGENT fill:#f3e5f5
     style TOOLS fill:#fff3e0
@@ -51,3 +57,4 @@ flowchart TD
     style CLAUDE fill:#fce4ec
     style HUMAN fill:#e1f5ff
     style EVAL fill:#f1f8e9
+    style STORAGE fill:#fffde7

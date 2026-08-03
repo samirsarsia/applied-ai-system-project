@@ -7,7 +7,7 @@ PawPal+ Care Advisor (see `README.md` for the system overview and
 ## What are the limitations or biases in your system?
 
 - **Offline planner has a narrow, hand-picked vocabulary.** When no
-  `ANTHROPIC_API_KEY` is set, `_run_offline()` in `agent.py` only recognizes
+  `GEMINI_API_KEY` is set, `_run_offline()` in `agent.py` only recognizes
   a handful of keyword patterns ("tired", "busy", "exhausted", "only have",
   "cut", "reduce"). A perfectly reasonable request like "can Mochi skip
   grooming today?" won't match any pattern and silently falls through to a
@@ -62,7 +62,7 @@ discoverable, just not preventable in real time.
 I did not identify a plausible path to *large-scale* misuse (e.g., spam,
 fraud) — the system only ever operates on the local Owner/Pet data it's
 given and has no network-facing surface other than the outbound call to the
-Anthropic API in live mode.
+Gemini API in live mode.
 
 ## What surprised you while testing your AI's reliability?
 
@@ -89,8 +89,12 @@ Reading a single aggregate number without the per-case breakdown would have
 been actively misleading, which is why the harness prints both.
 
 The third, and most striking, surprise came from finally testing the live
-Claude path with a real API key rather than only the offline fallback. Two
-things happened that the offline planner cannot do at all:
+LLM path with a real API key rather than only the offline fallback. (This
+account was originally written testing live Claude; the system has since
+been switched to Google Gemini as the live provider — see `README.md`'s
+"Verified live-LLM run" section for the current Gemini-specific evidence and
+a similar surprise it produced independently.) Two things happened that the
+offline planner cannot do at all:
 
 1. Asked for a schedule status, the live model **independently caught a real
    inconsistency**: `detect_conflicts()` reports the "Morning walk" conflict

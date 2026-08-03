@@ -2,7 +2,7 @@
 
 Run with:  python -m pytest
 
-These run entirely offline (no ANTHROPIC_API_KEY set in CI), which exercises
+These run entirely offline (no GEMINI_API_KEY set in CI), which exercises
 the deterministic offline planner. That's intentional: it's the same
 plan -> act -> verify loop and the same tool functions the live-LLM path
 uses, so testing it here is a real test of the agentic machinery, not a
